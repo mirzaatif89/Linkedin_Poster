@@ -1,0 +1,109 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>LinkedIn Scraper</title>
+  <link rel="stylesheet" href="styles.css" />
+  <script defer src="app.js"></script>
+</head>
+<body>
+  <div class="card">
+    <div class="topbar">
+      <h1>LinkedIn Scraper</h1>
+      <div class="mode-tabs">
+        <button id="tabScraper" type="button" class="tab active">Scrapper</button>
+        <button id="tabPoster" type="button" class="tab">LinkedIn Poster</button>
+      </div>
+    </div>
+    <p class="subtitle">Enter your LinkedIn credentials and search term. The bot will fetch post results and export them to CSV.</p>
+    <section id="scraperView">
+      <form id="search-form">
+        <div class="field">
+          <label for="email">LinkedIn email</label>
+          <input id="email" name="email" type="email" placeholder="you@example.com" required />
+        </div>
+        <div class="field">
+          <label for="password">Password</label>
+          <input id="password" name="password" type="password" placeholder="••••••••" required />
+        </div>
+        <div class="field">
+          <label for="searchTerm">Search term / keywords</label>
+          <input id="searchTerm" name="searchTerm" placeholder="e.g. Data Engineer" required />
+        </div>
+        <div class="field">
+          <label for="pages">Pages to scrape (posts)</label>
+          <input id="pages" name="pages" type="number" min="1" max="20" value="3" />
+        </div>
+        <div class="field">
+          <label for="sortBy">Sort by</label>
+          <select id="sortBy" name="sortBy">
+            <option value="relevance" selected>Relevance</option>
+            <option value="recent">Latest</option>
+          </select>
+        </div>
+        <div class="field">
+          <label for="datePosted">Date posted</label>
+          <select id="datePosted" name="datePosted">
+            <option value="">Any time</option>
+            <option value="past-24h">Past 24 hours</option>
+            <option value="past-week">Past week</option>
+            <option value="past-month">Past month</option>
+          </select>
+        </div>
+        <div class="field">
+          <label for="location">Location filter</label>
+          <input id="location" name="location" placeholder="e.g. San Francisco" />
+        </div>
+        <div class="field">
+          <label for="company">Company contains (optional)</label>
+          <input id="company" name="company" placeholder="e.g. Microsoft" />
+        </div>
+        <div class="field two-col">
+          <label for="notes">Filter notes (optional)</label>
+          <textarea id="notes" name="notes" placeholder="This field is just for your own notes in the CSV output."></textarea>
+        </div>
+        <div class="actions">
+          <button id="submit" type="submit">Start scraping</button>
+          <span class="status-pill" id="status" data-state="idle">idle</span>
+          <p class="small" id="result-path"></p>
+          <button id="resume" type="button" class="ghost">Continue after verification</button>
+        </div>
+      </form>
+    </section>
+    <section id="posterView" class="poster-view">
+      <form id="poster-form" class="poster-form">
+        <div class="field">
+          <label for="posterEmail">LinkedIn email</label>
+          <input id="posterEmail" name="posterEmail" type="email" placeholder="you@example.com" />
+        </div>
+        <div class="field">
+          <label for="posterPassword">Password</label>
+          <input id="posterPassword" name="posterPassword" type="password" placeholder="••••••••" />
+        </div>
+        <div class="field">
+          <label for="posterTitle">Post Title</label>
+          <input id="posterTitle" name="posterTitle" type="text" placeholder="e.g. Hiring: Python Developer" />
+        </div>
+        <div class="field">
+          <label for="postCounter">Post Counter</label>
+          <input id="postCounter" name="postCounter" type="number" min="1" value="1" />
+        </div>
+        <div class="field">
+          <label for="postTimer">Post Timer</label>
+          <input id="postTimer" name="postTimer" type="time" />
+        </div>
+        <div class="field">
+          <label for="postSchedule">Post Schedule</label>
+          <input id="postSchedule" name="postSchedule" type="datetime-local" />
+        </div>
+        <div class="actions">
+          <button id="posterLogin" type="button">Login & Post</button>
+        </div>
+        <p class="small" id="posterStatus"></p>
+      </form>
+    </section>
+    <div class="log" id="log"></div>
+  </div>
+</body>
+</html>
