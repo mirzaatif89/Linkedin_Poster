@@ -99,7 +99,7 @@ posterLoginBtn?.addEventListener("click", async () => {
   const timer = postTimer?.value || "";
   const schedule = postSchedule?.value || "";
   if (!title) {
-    if (posterStatus) posterStatus.textContent = "Post Title required.";
+    if (posterStatus) posterStatus.textContent = "Post Category required.";
     return;
   }
   if (posterStatus) posterStatus.textContent = "Generating and posting...";

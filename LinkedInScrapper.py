@@ -1,12 +1,11 @@
 import csv
-import base64
 import json
 import os
 import re
 import threading
 import time
-import urllib.request
 import urllib.error
+import urllib.request
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -23,14 +22,12 @@ from webdriver_manager.chrome import ChromeDriverManager
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.units import cm
 from reportlab.pdfgen import canvas
-from PIL import Image, ImageDraw, ImageFont
 try:
     import undetected_chromedriver as uc
 except ImportError:  # uc is optional; fallback to standard driver
     uc = None
 
 USE_UNDETECTED = False  # flip to True only if standard Chrome driver fails
-
 UI_DIR = Path(__file__).parent / "ui"
 INDEX_HTML = UI_DIR / "index.html"
 ENV_PATH = Path(__file__).parent / ".env"
@@ -207,14 +204,13 @@ class ScraperAPI:
                 self._login(self._poster_driver, email, password)
                 self._push_log("Poster login complete.")
             content = self._generate_post_content(title)
-            image_path = self._generate_post_image(content["title"])
-            if image_path:
-                self._push_log(f"Image saved: {image_path}")
+            post_text = self._normalize_post_text(content)
+            if self._poster_driver:
+                self._push_log("Posting to LinkedIn feed...")
+                self._post_to_linkedin(self._poster_driver, post_text, None)
+                self._push_log("Post submitted to LinkedIn.")
             else:
-                self._push_log("Image generation failed or skipped.")
-            pdf_path = self._generate_post_pdf(content["title"], content["description"], image_path)
-            if pdf_path:
-                self._push_log(f"PDF saved: {pdf_path}")
+                self._push_log("Poster driver not available; skipping LinkedIn post.")
         except Exception as exc:
             self._push_log(f"Poster post error: {exc}")
 
@@ -528,10 +524,14 @@ class ScraperAPI:
                 "input": (
                     "Create a motivational LinkedIn post based on the topic. "
                     "Return JSON with keys: title, description. "
-                    "Title should be catchy and professional. "
-                    "Description should be detailed and motivational (250-350 words) in English. "
+                    "Title should be optimized, catchy, and professional (max 8 words). "
+                    "Description should be detailed and motivational (around 250-350 words) in English, "
+                    "include plenty of tasteful emojis throughout, and end with SEO-friendly hashtags "
+                    "(exactly 10, space-separated). "
+                    "Return JSON only, no extra text. "
                     f"Topic: {title}."
                 ),
+                "max_output_tokens": 3000,
             }
             try:
                 req = urllib.request.Request(
@@ -545,179 +545,44 @@ class ScraperAPI:
                 )
                 with urllib.request.urlopen(req, timeout=30) as resp:
                     data = json.load(resp)
-                output = data.get("output_text") or ""
+                output = self._extract_openai_text(data)
                 parsed = self._safe_parse_json(output)
                 if parsed:
                     return {
                         "title": parsed.get("title", title).strip() or title,
                         "description": parsed.get("description", "").strip() or title,
                     }
+                self._push_log("OpenAI response missing JSON payload; using fallback.")
             except (urllib.error.URLError, urllib.error.HTTPError, json.JSONDecodeError) as exc:
                 self._push_log(f"OpenAI error, using fallback: {exc}")
 
         return {
             "title": title,
-            "description": (
-                f"{title}\n\n"
-                "Progress is built on consistency, not perfection. "
-                "Focus on one meaningful step today, then another tomorrow. "
-                "Momentum compounds faster than motivation, and small wins build confidence. "
-                "If you feel stuck, simplify your next move and commit to a short, focused sprint. "
-                "Keep learning, keep iterating, and keep showing up. "
-                "Your future self will thank you for the discipline you practice today."
-            ),
+            "description": self._generate_fallback_description(title),
         }
 
-    def _generate_post_image(self, title: str) -> Optional[str]:
-        output_dir = ensure_output_dir()
-        filename = output_dir / f"poster_image_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png"
-        gemini_key = os.environ.get("GEMINI_API_KEY", "").strip()
-        if gemini_key:
-            prompt = (
-                "Create a premium, professional LinkedIn post image. "
-                f"Topic: {title}. "
-                "Use a clean editorial layout, generous whitespace, and a refined sans-serif title. "
-                "Add subtle geometric accents and a soft gradient background. "
-                "Keep the design sophisticated and corporate."
-            )
-            payload = {
-                "prompt": {"text": prompt},
-                "aspectRatio": "1:1",
-            }
-            try:
-                req = urllib.request.Request(
-                    "https://generativelanguage.googleapis.com/v1beta/models/imagen-3.0-generate-002:generateImages"
-                    f"?key={gemini_key}",
-                    data=json.dumps(payload).encode("utf-8"),
-                    headers={"Content-Type": "application/json"},
-                    method="POST",
-                )
-                with urllib.request.urlopen(req, timeout=60) as resp:
-                    data = json.load(resp)
-                image_data = None
-                for item in data.get("generatedImages", []):
-                    image_info = item.get("image") or {}
-                    b64 = image_info.get("imageBytes")
-                    if b64:
-                        image_data = base64.b64decode(b64)
-                        break
-                if image_data:
-                    with filename.open("wb") as f:
-                        f.write(image_data)
-                    return str(filename.resolve())
-                self._push_log("Gemini image generation error: empty image data.")
-            except (urllib.error.URLError, urllib.error.HTTPError, json.JSONDecodeError, ValueError) as exc:
-                self._push_log(f"Gemini image generation error: {exc}")
-        api_key = os.environ.get("OPENAI_API_KEY", "").strip()
-        if api_key:
-            prompt = (
-                "Create a premium, professional LinkedIn post image. "
-                f"Topic: {title}. "
-                "Use a clean editorial layout, generous whitespace, and a refined sans-serif title. "
-                "Add subtle geometric accents and a soft gradient background. "
-                "Keep the design sophisticated and corporate."
-            )
-            payload = {
-                "model": "gpt-image-1",
-                "prompt": prompt,
-                "size": "1024x1024",
-            }
-            try:
-                req = urllib.request.Request(
-                    "https://api.openai.com/v1/images/generations",
-                    data=json.dumps(payload).encode("utf-8"),
-                    headers={
-                        "Content-Type": "application/json",
-                        "Authorization": f"Bearer {api_key}",
-                    },
-                    method="POST",
-                )
-                with urllib.request.urlopen(req, timeout=60) as resp:
-                    data = json.load(resp)
-                image_data = None
-                if data.get("data") and isinstance(data["data"], list):
-                    item = data["data"][0]
-                    if "b64_json" in item:
-                        image_data = base64.b64decode(item["b64_json"])
-                    elif "url" in item:
-                        with urllib.request.urlopen(item["url"], timeout=60) as img_resp:
-                            image_data = img_resp.read()
-                if image_data:
-                    with filename.open("wb") as f:
-                        f.write(image_data)
-                    return str(filename.resolve())
-                self._push_log("Image generation error: empty image data.")
-            except (urllib.error.URLError, urllib.error.HTTPError, json.JSONDecodeError, ValueError) as exc:
-                self._push_log(f"Image generation error: {exc}")
-        # Local fallback: generate a simple title image
-        try:
-            width, height = 1200, 1200
-            image = Image.new("RGB", (width, height), (245, 248, 252))
-            draw = ImageDraw.Draw(image)
-            # Soft gradient background
-            top = (248, 250, 253)
-            bottom = (230, 238, 246)
-            for y in range(height):
-                ratio = y / (height - 1)
-                r = int(top[0] + (bottom[0] - top[0]) * ratio)
-                g = int(top[1] + (bottom[1] - top[1]) * ratio)
-                b = int(top[2] + (bottom[2] - top[2]) * ratio)
-                draw.line([(0, y), (width, y)], fill=(r, g, b))
+    def _extract_openai_text(self, data: Dict[str, Any]) -> str:
+        if not data:
+            return ""
+        output_text = data.get("output_text")
+        if isinstance(output_text, str) and output_text.strip():
+            return output_text.strip()
+        chunks: List[str] = []
+        for item in data.get("output", []) or []:
+            for content in item.get("content", []) or []:
+                text = content.get("text")
+                if isinstance(text, str) and text.strip():
+                    chunks.append(text.strip())
+        return "\n".join(chunks).strip()
 
-            # Accent band and geometric shapes
-            accent = (18, 82, 120)
-            accent_light = (64, 145, 196)
-            draw.rectangle([0, 0, width, 140], fill=accent)
-            draw.polygon(
-                [(0, height - 240), (320, height), (0, height)],
-                fill=(218, 230, 240),
-            )
-            draw.ellipse([width - 420, 180, width - 140, 460], outline=accent_light, width=6)
-            draw.rectangle([width - 520, 480, width - 260, 520], fill=accent_light)
-
-            title_text = (title or "LinkedIn Post").strip()
-            subtitle = "Insightful. Professional. Ready to share."
-
-            try:
-                title_font = ImageFont.truetype("arialbd.ttf", 64)
-                subtitle_font = ImageFont.truetype("arial.ttf", 28)
-            except OSError:
-                title_font = ImageFont.load_default()
-                subtitle_font = ImageFont.load_default()
-
-            max_text_width = width - 220
-            lines: List[str] = []
-            words = title_text.split()
-            current: List[str] = []
-            for word in words:
-                test_line = " ".join(current + [word])
-                bbox = draw.textbbox((0, 0), test_line, font=title_font)
-                if bbox[2] - bbox[0] <= max_text_width:
-                    current.append(word)
-                else:
-                    if current:
-                        lines.append(" ".join(current))
-                    current = [word]
-            if current:
-                lines.append(" ".join(current))
-
-            y = 260
-            for line in lines[:5]:
-                bbox = draw.textbbox((0, 0), line, font=title_font)
-                line_width = bbox[2] - bbox[0]
-                x = (width - line_width) // 2
-                draw.text((x, y), line, fill=(16, 32, 48), font=title_font)
-                y += 78
-
-            bbox = draw.textbbox((0, 0), subtitle, font=subtitle_font)
-            sub_x = (width - (bbox[2] - bbox[0])) // 2
-            draw.text((sub_x, y + 10), subtitle, fill=(70, 90, 110), font=subtitle_font)
-
-            image.save(filename, "PNG")
-            return str(filename.resolve())
-        except Exception as exc:
-            self._push_log(f"Local image generation error: {exc}")
-            return None
+    def _normalize_post_text(self, content: Dict[str, str]) -> str:
+        title = (content.get("title") or "").strip()
+        description = (content.get("description") or "").strip()
+        combined = f"{title}\n\n{description}" if title else description
+        combined = re.sub(r"\r\n", "\n", combined)
+        combined = re.sub(r"\n{3,}", "\n\n", combined)
+        combined = "\n\n".join([re.sub(r"\s+", " ", part).strip() for part in combined.split("\n\n")])
+        return self._enforce_char_limit(combined.strip(), max_chars=2800)
 
     def _generate_post_pdf(self, title: str, text: str, image_path: Optional[str]) -> Optional[str]:
         try:
@@ -728,6 +593,7 @@ class ScraperAPI:
             x = 2 * cm
             y = height - 2.2 * cm
             max_width = width - 4 * cm
+            normalized_text = re.sub(r"\s+", " ", text or "").strip()
 
             c.setFont("Helvetica-Bold", 18)
             for line in self._wrap_text(title, max_width, c, "Helvetica-Bold", 18):
@@ -736,7 +602,7 @@ class ScraperAPI:
             y -= 0.4 * cm
 
             c.setFont("Helvetica", 11)
-            for line in self._wrap_text(text, max_width, c, "Helvetica", 11):
+            for line in self._wrap_text(normalized_text, max_width, c, "Helvetica", 11):
                 c.drawString(x, y, line)
                 y -= 0.6 * cm
                 if y < 6 * cm:
@@ -784,7 +650,7 @@ class ScraperAPI:
             except json.JSONDecodeError:
                 return None
 
-    def _hashtags_from_title(self, title: str, max_tags: int = 4) -> str:
+    def _hashtags_from_title(self, title: str, max_tags: int = 10) -> str:
         words = re.findall(r"[A-Za-z0-9]+", title)
         tags = []
         for word in words:
@@ -799,59 +665,113 @@ class ScraperAPI:
             tags = ["#Motivation", "#Growth", "#Mindset"]
         return " ".join(tags)
 
+    def _generate_fallback_description(self, topic: str, target_words: int = 320) -> str:
+        base_topic = topic.strip() or "Professional Growth"
+        emoji_cycle = ["🚀", "✨", "🔥", "✅", "🎯", "💡", "📈", "🧠", "🤝", "🌟", "💪", "🗣️", "📌", "🏆", "🛠️"]
+        sections = [
+            f"{base_topic} is more than a topic; it is a mindset you can practice daily. 🌟",
+            "Start with clarity. Define what success looks like, then break it into small, visible steps. 🎯",
+            "Consistency beats intensity. A small win each day builds real momentum. 💪",
+            "Focus on outcomes, not just activity. Track progress, reflect, and iterate. 📌",
+            "People remember value. Share insights, document lessons, and help others win. 🤝",
+            "Quality work compounds. When you improve 1% every day, you build a powerful edge. 📈",
+            "Use feedback as data. Adjust your approach without losing your core direction. 🧭",
+            "Build simple systems: a weekly plan, a daily checklist, and a review ritual. 🛠️",
+            "Protect your energy. Deep work and clear priorities create better results. 🧠",
+            "Celebrate progress, not perfection. Growth is a long game, and you are on it. 🏆",
+        ]
+        connectors = [
+            "Here is the part most people miss:",
+            "A practical step you can apply today:",
+            "If you feel stuck, try this:",
+            "Remember this simple rule:",
+            "The real breakthrough is usually simple:",
+        ]
+        paragraph_templates = [
+            "{topic} works best when you combine strategy with execution. {connector} "
+            "write down your top three actions for the week, schedule them, and protect those slots. "
+            "This creates a clear path from intention to impact. {emoji}",
+            "Think about {topic} as a system, not a single task. {connector} focus on repeatable habits "
+            "like learning, shipping, and sharing. Those habits turn effort into results over time. {emoji}",
+            "In {topic}, attention to detail creates trust. {connector} slow down for quality, "
+            "then speed up with templates and checklists. That balance keeps quality high and stress low. {emoji}",
+            "{topic} also benefits from community. {connector} find peers, ask questions, "
+            "and contribute ideas. Collaboration shortens the learning curve and keeps you motivated. {emoji}",
+            "If you want to level up in {topic}, measure progress. {connector} review what worked, "
+            "what did not, and what you will change next week. Small adjustments add up fast. {emoji}",
+        ]
+        paragraphs: List[str] = []
+        paragraphs.append(f"{base_topic}\n")
+        paragraphs.append("Progress is built on consistency, not perfection. 🌟")
+        paragraphs.extend(sections)
+
+        idx = 0
+        while len(" ".join(paragraphs).split()) < target_words:
+            template = paragraph_templates[idx % len(paragraph_templates)]
+            connector = connectors[idx % len(connectors)]
+            emoji = emoji_cycle[idx % len(emoji_cycle)]
+            paragraphs.append(template.format(topic=base_topic, connector=connector, emoji=emoji))
+            idx += 1
+
+        text = "\n\n".join(paragraphs).strip()
+        hashtags = self._hashtags_from_title(base_topic, max_tags=10)
+        # Expand to SEO-friendly tags when topic is short.
+        if len(hashtags.split()) < 10:
+            extra = [
+                "#Productivity",
+                "#Leadership",
+                "#Career",
+                "#PersonalBrand",
+                "#Strategy",
+                "#Learning",
+                "#GrowthMindset",
+                "#Innovation",
+            ]
+            for tag in extra:
+                if tag not in hashtags.split():
+                    hashtags += f" {tag}"
+                if len(hashtags.split()) >= 10:
+                    break
+        return f"{text}\n\n{hashtags}"
+
+    def _enforce_char_limit(self, text: str, max_chars: int = 2800) -> str:
+        if len(text) <= max_chars:
+            return text
+        hashtags = ""
+        parts = text.split("\n\n")
+        if parts:
+            last = parts[-1].strip()
+            if last.startswith("#"):
+                hashtags = last
+                parts = parts[:-1]
+        base = "\n\n".join(parts).strip()
+        if not hashtags:
+            return (base[: max_chars - 1] + "…").strip()
+        reserve = len(hashtags) + 2
+        allowed = max_chars - reserve - 1
+        trimmed = base[:allowed].rstrip()
+        return f"{trimmed}…\n\n{hashtags}"
+
     def _post_to_linkedin(self, driver: webdriver.Chrome, text: str, image_path: Optional[str]) -> None:
         driver.get("https://www.linkedin.com/feed/")
         time.sleep(2)
-        self._push_log("Post: feed opened, searching composer trigger...")
-        trigger_selectors = [
-            "button.share-box-feed-entry__trigger",
-            "button[data-control-name='sharebox_trigger']",
-            "button[aria-label*='Start a post']",
-            "button[aria-label*='Create a post']",
-            "div[role='button'][aria-label*='Start a post']",
-            "div[role='button'][aria-label*='Create a post']",
-        ]
-        trigger = self._first_clickable(driver, trigger_selectors)
-        if trigger:
-            trigger.click()
-            self._push_log("Post: composer trigger clicked.")
-        else:
-            raise RuntimeError("Cannot find post composer trigger.")
-        time.sleep(1.5)
-        self._push_log("Post: searching editor...")
-        editor = self._first_clickable(
-            driver,
-            [
-                "div.ql-editor",
-                "div.share-box__text-editor",
-                "div.editor-content",
-                "div[role='textbox']",
-            ],
+        self._push_log("Post: clicking target element after login...")
+        target = WebDriverWait(driver, 12).until(
+            EC.element_to_be_clickable((By.XPATH, "//*[@id='ember34']"))
         )
-        if not editor:
-            raise RuntimeError("Cannot find post editor.")
-        editor.click()
-        editor.send_keys(text)
-        time.sleep(0.8)
+        target.click()
+        self._push_log("Post: target element clicked, waiting for composer...")
+        editor = WebDriverWait(driver, 12).until(
+            EC.presence_of_element_located((By.CSS_SELECTOR, "div[role='textbox'], div.ql-editor, div[contenteditable='true']"))
+        )
+        self._set_editor_text(driver, editor, text)
         self._push_log("Post: content entered.")
-        if image_path:
-            self._push_log("Post: attaching image...")
-            self._attach_image(driver, image_path)
-            self._push_log("Post: image attached.")
-        self._push_log("Post: searching Post button...")
-        post_btn = self._first_clickable(
-            driver,
-            [
-                "button.share-actions__primary-action",
-                "button[data-control-name='share_post']",
-                "button[aria-label*='Post']",
-                "button[aria-label='Post']",
-                "div[role='button'][aria-label='Post']",
-            ],
+        time.sleep(1.2)
+        self._push_log("Post: clicking Post button...")
+        post_button = WebDriverWait(driver, 12).until(
+            EC.element_to_be_clickable((By.XPATH, "//*[@id='ember247']"))
         )
-        if not post_btn:
-            raise RuntimeError("Cannot find Post button.")
-        post_btn.click()
+        post_button.click()
         self._push_log("Post: Post button clicked.")
         time.sleep(1.5)
 
@@ -885,6 +805,21 @@ class ScraperAPI:
             except Exception:
                 continue
         return None
+
+    def _set_editor_text(self, driver: webdriver.Chrome, editor, text: str) -> None:
+        driver.execute_script(
+            "arguments[0].focus(); arguments[0].textContent = arguments[1]; arguments[0].dispatchEvent(new Event('input', {bubbles: true}));",
+            editor,
+            text,
+        )
+        time.sleep(0.4)
+        # Fallback: send keys if JS injection fails to register.
+        try:
+            if editor.text.strip() == "":
+                editor.click()
+                editor.send_keys(text)
+        except Exception:
+            pass
 
     def _write_csv(self, rows: List[Dict[str, str]]) -> str:
         output_dir = ensure_output_dir()
